@@ -1,0 +1,105 @@
+-- Rolling 3-Month Average Spend Per Facility
+SELECT
+  ph1.facility_name,
+  ph1.purchase_date,
+  ph1.purchase_total,
+  (
+    SELECT AVG(ph2.purchase_total)
+    FROM your_dataset.your_table ph2
+    WHERE
+      ph2.facility_name = ph1.facility_name
+      AND ph2.purchase_date BETWEEN DATE_SUB(ph1.purchase_date, INTERVAL 2 MONTH) AND ph1.purchase_date
+  ) AS rolling_3_month_avg
+FROM your_dataset.your_table ph1
+ORDER BY facility_name, purchase_date;
+
+-- Yearly Spend and Year-over-Year (YoY) Growth
+WITH yearly_spend AS (
+  SELECT
+    EXTRACT(YEAR FROM purchase_date) AS year,
+    SUM(purchase_total) AS total_spend
+  FROM your_dataset.your_table
+  GROUP BY year
+)
+
+SELECT
+  year,
+  total_spend,
+  LAG(total_spend) OVER (ORDER BY year) AS previous_year_spend,
+  SAFE_DIVIDE(total_spend - LAG(total_spend) OVER (ORDER BY year),
+              LAG(total_spend) OVER (ORDER BY year)) * 100 AS yoy_growth_percentage
+FROM yearly_spend
+ORDER BY year;
+
+-- Monthly Spend Comparison Across Years (Pivoted)
+SELECT
+  EXTRACT(MONTH FROM purchase_date) AS month,
+  SUM(CASE WHEN EXTRACT(YEAR FROM purchase_date) = 2021 THEN purchase_total END) AS spend_2021,
+  SUM(CASE WHEN EXTRACT(YEAR FROM purchase_date) = 2022 THEN purchase_total END) AS spend_2022,
+  SUM(CASE WHEN EXTRACT(YEAR FROM purchase_date) = 2023 THEN purchase_total END) AS spend_2023
+FROM your_dataset.your_table
+GROUP BY month
+ORDER BY month;
+
+-- Cumulative Spend Over Time Per Facility
+SELECT
+  facility_name,
+  purchase_date,
+  SUM(purchase_total) OVER (PARTITION BY facility_name ORDER BY purchase_date) AS cumulative_spend
+FROM your_dataset.your_table
+ORDER BY facility_name, purchase_date;
+
+-- Outlier Detection Using Z-Score
+WITH scored_data AS (
+  SELECT *,
+         (purchase_total - AVG(purchase_total) OVER()) / STDDEV(purchase_total) OVER() AS z_score
+  FROM your_dataset.your_table
+)
+SELECT *
+FROM scored_data
+WHERE ABS(z_score) > 3;
+
+-- Facility Cohort Analysis (Monthly Spend Since First Purchase)
+WITH facility_cohort AS (
+  SELECT
+    facility_id,
+    DATE_TRUNC(MIN(purchase_date), MONTH) AS cohort_month
+  FROM your_dataset.your_table
+  GROUP BY facility_id
+),
+
+monthly_spend AS (
+  SELECT
+    facility_id,
+    DATE_TRUNC(purchase_date, MONTH) AS spend_month,
+    SUM(purchase_total) AS monthly_spend
+  FROM your_dataset.your_table
+  GROUP BY facility_id, spend_month
+),
+
+cohort_analysis AS (
+  SELECT
+    fc.cohort_month,
+    ms.spend_month,
+    fc.facility_id,
+    ms.monthly_spend
+  FROM facility_cohort fc
+  JOIN monthly_spend ms ON fc.facility_id = ms.facility_id
+  WHERE ms.spend_month >= fc.cohort_month
+),
+
+cohort_spend AS (
+  SELECT
+    cohort_month,
+    DATE_DIFF(spend_month, cohort_month, MONTH) AS months_since_start,
+    SUM(monthly_spend) AS total_monthly_spend
+  FROM cohort_analysis
+  GROUP BY cohort_month, months_since_start
+)
+
+SELECT
+  cohort_month,
+  months_since_start,
+  total_monthly_spend
+FROM cohort_spend
+ORDER BY cohort_month, months_since_start;
